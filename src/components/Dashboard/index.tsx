@@ -1,13 +1,9 @@
-import React, { useState, useRef, useImperativeHandle } from 'react';
+import React, { useState, useRef } from 'react';
 import './Dashboard.css';
-import FloatingPanels from './FloatingPanels';
+import FloatingPanels from './components/FloatingPanels';
 import Scene, { SceneRef } from '../Scene';
-import TimeWeather from './TimeWeather';
-
-interface TabItem {
-  id: string;
-  label: string;
-}
+import TimeWeather from './components/TimeWeather';
+import { tabConfigs } from './tabs/TabConfig';
 
 const Dashboard: React.FC = () => {
   const [leftActiveTab, setLeftActiveTab] = useState('growth');
@@ -17,16 +13,8 @@ const Dashboard: React.FC = () => {
   const [viewMode, setViewMode] = useState<'normal' | 'aerial' | 'interior'>('normal');
   const sceneRef = useRef<SceneRef>(null);
 
-  const allTabs: TabItem[] = [
-    { id: 'growth', label: '生长指标' },
-    { id: 'environment', label: '环境指标' },
-    { id: 'materials', label: '物料投入' },
-    { id: 'nutrition', label: '营养健康' },
-    { id: 'feeding', label: '摄食强度' },
-    { id: 'water', label: '水质检测' },
-  ];
-
-  // 保持原有的activeTab状态逻辑，用于向下兼容FloatingPanels
+  // 使用新的tab配置
+  const allTabs = tabConfigs;
   const leftTabs = allTabs.slice(0, 4);
   const rightTabs = allTabs.slice(4, 6);
 
