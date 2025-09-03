@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -7,7 +7,13 @@ interface SceneProps {
   onSceneChange?: (scene: 'exterior' | 'interior' | 'transitioning') => void;
 }
 
-const Scene: React.FC<SceneProps> = ({ onSceneChange }) => {
+export interface SceneRef {
+  triggerInteriorView: () => void;
+  setAerialView: () => void;
+  setNormalView: () => void;
+}
+
+const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const [currentScene, setCurrentScene] = useState<'exterior' | 'interior' | 'transitioning'>('exterior');
   
@@ -33,6 +39,76 @@ const Scene: React.FC<SceneProps> = ({ onSceneChange }) => {
     endTarget: new THREE.Vector3(0, 0, 0),
     clickedFarmPosition: new THREE.Vector3()
   });
+
+  // Expose methods to parent component
+  useImperativeHandle(ref, () => ({
+    triggerInteriorView: () => {
+      console.log('Manual interior view triggered');
+      // Simulate clicking the first farm building to trigger interior view
+      if (currentSceneRef.current === 'exterior' && farmBuildingsRef.current.length > 0) {
+        const farm = farmBuildingsRef.current[0];
+        let farmPosition = new THREE.Vector3();
+        farm.getWorldPosition(farmPosition);
+        
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        if (camera && controls) {
+          // Store starting position and target
+          transitionRef.current.startPosition.copy(camera.position);
+          transitionRef.current.startTarget.copy(controls.target);
+          transitionRef.current.clickedFarmPosition.copy(farmPosition);
+          
+          // Disable controls during transition
+          controls.enabled = false;
+          
+          // Start transition
+          transitionRef.current.isTransitioning = true;
+          transitionRef.current.startTime = Date.now();
+          setCurrentScene('transitioning');
+        }
+      }
+    },
+    setAerialView: () => {
+      console.log('Setting aerial view');
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+      if (camera && controls && currentSceneRef.current === 'exterior') {
+        // Temporarily adjust control limits to allow aerial view
+        controls.minPolarAngle = 0; // Allow fully vertical view from above
+        controls.maxPolarAngle = Math.PI / 2.1; // Allow aerial angles
+        controls.minDistance = 15; // Minimum height for aerial view
+        controls.maxDistance = 60; // Maximum height
+        
+        // Set aerial view position - high above looking down
+        camera.position.set(0, 30, 0);
+        camera.lookAt(0, 0, 0);
+        
+        // Update controls target and position
+        controls.target.set(0, 0, 0);
+        controls.update();
+      }
+    },
+    setNormalView: () => {
+      console.log('Setting normal view');
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+      if (camera && controls && currentSceneRef.current === 'exterior') {
+        // Restore original control limits
+        controls.minDistance = 8; // Allow closer inspection
+        controls.maxDistance = 60; // Reasonable maximum distance
+        controls.maxPolarAngle = Math.PI / 2.2; // Prevent going below ground
+        controls.minPolarAngle = Math.PI / 6; // Prevent going too high above
+        
+        // Set normal view position
+        camera.position.set(5, 1.75, 5);
+        camera.lookAt(0, 0.5, 0);
+        
+        // Update controls target and position
+        controls.target.set(0, 1, 0);
+        controls.update();
+      }
+    }
+  }));
 
   // Keep scene ref in sync with state
   useEffect(() => {
@@ -1054,6 +1130,8 @@ const Scene: React.FC<SceneProps> = ({ onSceneChange }) => {
       <div ref={mountRef} className="three-scene" />
     </div>
   );
-};
+});
+
+Scene.displayName = 'Scene';
 
 export default Scene;
