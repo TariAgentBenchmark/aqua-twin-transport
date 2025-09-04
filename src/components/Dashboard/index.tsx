@@ -13,23 +13,15 @@ const Dashboard: React.FC = () => {
   const [viewMode, setViewMode] = useState<'normal' | 'aerial' | 'interior'>('normal');
   const sceneRef = useRef<SceneRef>(null);
 
-  // 使用新的tab配置
-  const allTabs = tabConfigs;
-  const leftTabs = allTabs.slice(0, 4);
-  const rightTabs = allTabs.slice(4, 6);
-
   const handleSceneChange = (scene: 'exterior' | 'interior' | 'transitioning') => {
     setCurrentScene(scene);
   };
 
   const handleTabClick = (tabId: string) => {
     setActiveTab(tabId);
-    // 保持原有的左右tab状态逻辑，用于FloatingPanels兼容性
-    if (leftTabs.find(tab => tab.id === tabId)) {
-      setLeftActiveTab(tabId);
-    } else if (rightTabs.find(tab => tab.id === tabId)) {
-      setRightActiveTab(tabId);
-    }
+    // Update tab states for visual feedback
+    setLeftActiveTab(tabId);
+    setRightActiveTab(tabId);
   };
 
   const handleViewChange = (view: 'aerial' | 'interior') => {
@@ -75,7 +67,7 @@ const Dashboard: React.FC = () => {
 
         <div className="header-center">
           <nav className="main-tab-navigation">
-            {allTabs.map(tab => (
+            {tabConfigs.map(tab => (
               <button
                 key={tab.id}
                 className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
@@ -115,6 +107,7 @@ const Dashboard: React.FC = () => {
           </button>
         </div>
       )}
+
     </div>
   );
 };
