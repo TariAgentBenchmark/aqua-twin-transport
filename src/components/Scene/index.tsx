@@ -443,8 +443,8 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
     directionalLight.position.set(30, 40, 20);
     directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
+    directionalLight.shadow.mapSize.width = 1024;
+    directionalLight.shadow.mapSize.height = 1024;
     directionalLight.shadow.camera.near = 0.5;
     directionalLight.shadow.camera.far = 100;
     directionalLight.shadow.camera.left = -50;
@@ -611,9 +611,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
 
         // Helper function to position tree on ground
         const positionTreeOnGround = (tree: THREE.Group, x: number, z: number) => {
-          // Calculate bounding box to get the bottom of the tree
-          const box = new THREE.Box3().setFromObject(tree);
-          tree.position.set(x, -box.min.y, z); // Position so bottom touches ground
+          // Calculate bounding box to get the bottom of the tree - cache result for performance
+          if (!tree.userData.boundingBox) {
+            tree.userData.boundingBox = new THREE.Box3().setFromObject(tree);
+          }
+          tree.position.set(x, -tree.userData.boundingBox.min.y, z); // Position so bottom touches ground
         };
 
         // Create 4 concentric rectangular rings
@@ -630,8 +632,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX = x + (Math.random() - 0.5) * 0.4;
              const offsetZ = halfSize + (Math.random() - 0.5) * 0.3;
              positionTreeOnGround(topTree, offsetX, offsetZ);
-             topTree.castShadow = true;
-             topTree.receiveShadow = true;
+             // Reduce shadow casting for distant trees to improve performance
+             if (ring < 2) { // Only inner 2 rings cast shadows
+               topTree.castShadow = true;
+               topTree.receiveShadow = true;
+             }
              scene.add(topTree);
 
              // Bottom row
@@ -641,8 +646,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX2 = x + (Math.random() - 0.5) * 0.4;
              const offsetZ2 = -halfSize + (Math.random() - 0.5) * 0.3;
              positionTreeOnGround(bottomTree, offsetX2, offsetZ2);
-             bottomTree.castShadow = true;
-             bottomTree.receiveShadow = true;
+             // Reduce shadow casting for distant trees to improve performance
+             if (ring < 2) { // Only inner 2 rings cast shadows
+               bottomTree.castShadow = true;
+               bottomTree.receiveShadow = true;
+             }
              scene.add(bottomTree);
            }
 
@@ -655,8 +663,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX3 = -halfSize + (Math.random() - 0.5) * 0.3;
              const offsetZ3 = z + (Math.random() - 0.5) * 0.4;
              positionTreeOnGround(leftTree, offsetX3, offsetZ3);
-             leftTree.castShadow = true;
-             leftTree.receiveShadow = true;
+             // Reduce shadow casting for distant trees to improve performance
+             if (ring < 2) { // Only inner 2 rings cast shadows
+               leftTree.castShadow = true;
+               leftTree.receiveShadow = true;
+             }
              scene.add(leftTree);
 
              // Right column
@@ -666,8 +677,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX4 = halfSize + (Math.random() - 0.5) * 0.3;
              const offsetZ4 = z + (Math.random() - 0.5) * 0.4;
              positionTreeOnGround(rightTree, offsetX4, offsetZ4);
-             rightTree.castShadow = true;
-             rightTree.receiveShadow = true;
+             // Reduce shadow casting for distant trees to improve performance
+             if (ring < 2) { // Only inner 2 rings cast shadows
+               rightTree.castShadow = true;
+               rightTree.receiveShadow = true;
+             }
              scene.add(rightTree);
            }
         }
@@ -704,8 +718,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
               2, // Position on ground (half of height)
               startZ + row * buildingSpacing
             );
-            building.castShadow = true;
-            building.receiveShadow = true;
+            // Only enable shadows for closer buildings to improve performance
+            if (row === 1 && col === 1) { // Center building only
+              building.castShadow = true;
+              building.receiveShadow = true;
+            }
             scene.add(building);
           }
         }
@@ -728,9 +745,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
 
         // Helper function to position building on ground
         const positionBuildingOnGround = (building: THREE.Group, x: number, z: number) => {
-          // Calculate bounding box to get the bottom of the building
-          const box = new THREE.Box3().setFromObject(building);
-          building.position.set(x, -box.min.y, z); // Position so bottom touches ground
+          // Calculate bounding box to get the bottom of the building - cache result for performance
+          if (!building.userData.boundingBox) {
+            building.userData.boundingBox = new THREE.Box3().setFromObject(building);
+          }
+          building.position.set(x, -building.userData.boundingBox.min.y, z); // Position so bottom touches ground
         };
 
         for (let row = 0; row < gridSize; row++) {
@@ -744,8 +763,11 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
               startZ + row * buildingSpacing
             );
             
-            farm.castShadow = true;
-            farm.receiveShadow = true;
+            // Only enable shadows for closer buildings to improve performance
+            if (row === 1 && col === 1) { // Center building only
+              farm.castShadow = true;
+              farm.receiveShadow = true;
+            }
             
             // Add slight rotation variation for realism
             farm.rotation.y = (Math.random() - 0.5) * 0.2;
@@ -1026,8 +1048,8 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
         const mainLight = new THREE.DirectionalLight(0xffffff, 0.7);
         mainLight.position.set(0, wallHeight - 1, 0);
         mainLight.castShadow = true;
-        mainLight.shadow.mapSize.width = 1024;
-        mainLight.shadow.mapSize.height = 1024;
+        mainLight.shadow.mapSize.width = 512;
+        mainLight.shadow.mapSize.height = 512;
         mainLight.shadow.camera.near = 0.5;
         mainLight.shadow.camera.far = 50;
         mainLight.shadow.camera.left = -20;
@@ -1055,8 +1077,8 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
             const pointLight = new THREE.PointLight(0xffffcc, 0.3, 8);
             pointLight.position.set(x, wallHeight - 0.5, z);
             pointLight.castShadow = true;
-            pointLight.shadow.mapSize.width = 512;
-            pointLight.shadow.mapSize.height = 512;
+            pointLight.shadow.mapSize.width = 256;
+            pointLight.shadow.mapSize.height = 256;
             pointLight.shadow.bias = -0.0001;
             scene.add(pointLight);
           }
@@ -1702,13 +1724,15 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
               const poolX = (col - 1.5) * poolSpacing;
               const poolZ = (row - 1) * poolSpacing;
               
-              // Position pool on ground
-              const box = new THREE.Box3().setFromObject(pool);
-              pool.position.set(poolX, -box.min.y, poolZ);
+              // Position pool on ground - cache bounding box for performance
+              if (!pool.userData.boundingBox) {
+                pool.userData.boundingBox = new THREE.Box3().setFromObject(pool);
+              }
+              pool.position.set(poolX, -pool.userData.boundingBox.min.y, poolZ);
               scene.add(pool);
 
               // Calculate water surface based on pool dimensions - circular water for round pools
-              const poolSize = box.getSize(new THREE.Vector3());
+              const poolSize = pool.userData.boundingBox.getSize(new THREE.Vector3());
               const waterRadius = Math.min(Math.min(poolSize.x, poolSize.z) * 0.44, 1.65); // Increased by 10%
               
               const waterGeometry = new THREE.CircleGeometry(waterRadius, 32);
