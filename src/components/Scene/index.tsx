@@ -24,6 +24,8 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
   const farmBuildingsRef = useRef<THREE.Group[]>([]);
   const fishArrayRef = useRef<THREE.Object3D[]>([]);
   const cloudSpritesRef = useRef<THREE.Sprite[]>([]);
+  const openableRef = useRef<THREE.Object3D[]>([]);
+  const interiorClickHandlerRef = useRef<((e: MouseEvent) => void) | null>(null);
   const raycastRef = useRef<THREE.Raycaster | null>(null);
   const mouseRef = useRef<THREE.Vector2 | null>(null);
   const currentSceneRef = useRef<'exterior' | 'interior' | 'transitioning'>('exterior');
@@ -915,6 +917,21 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
           // Add slight vertical bobbing
           fish.position.y = 0.1 + Math.sin(time * 2 + index) * 0.05;
         });
+
+        // Smoothly animate doors/windows toward target angles
+        for (const obj of openableRef.current) {
+          const pivot = (obj as any).userData?.pivotGroup as THREE.Group | undefined;
+          if (!pivot) continue;
+          const ud = (pivot as any).userData as { targetAngle: number; openAngle: number };
+          const current = pivot.rotation.y;
+          const target = ud.targetAngle;
+          const delta = target - current;
+          if (Math.abs(delta) > 0.001) {
+            pivot.rotation.y = current + delta * 0.12; // easing
+          } else {
+            pivot.rotation.y = target;
+          }
+        }
       }
       
       renderer.render(scene, camera);
@@ -935,6 +952,10 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
     return () => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('click', handleCanvasClick);
+      if (interiorClickHandlerRef.current && rendererRef.current) {
+        rendererRef.current.domElement.removeEventListener('click', interiorClickHandlerRef.current);
+        interiorClickHandlerRef.current = null;
+      }
       controls.dispose(); // Dispose of controls
       if (mountElement && renderer.domElement && mountElement.contains(renderer.domElement)) {
         mountElement.removeChild(renderer.domElement);
@@ -1179,34 +1200,287 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
         
         // Walls (16x12 floor, so walls should be positioned at edges)
         
-        // Front and back walls
-        const frontWallGeometry = new THREE.PlaneGeometry(16, wallHeight);
-        const frontWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
-        frontWall.position.set(0, wallHeight/2, -6);
+        // Helper: create alphaMap with rectangular holes (doors/windows) so we can see outside
+        const createWallMaterialWithHoles = (wallW: number, wallH: number, holes: Array<{ x: number; y: number; w: number; h: number }>) => {
+          const alphaCanvas = document.createElement('canvas');
+          alphaCanvas.width = 1024;
+          alphaCanvas.height = 512;
+          const actx = alphaCanvas.getContext('2d')!;
+          // Opaque base
+          actx.fillStyle = '#ffffff';
+          actx.fillRect(0, 0, alphaCanvas.width, alphaCanvas.height);
+          // Cut holes: x in [-wallW/2, wallW/2], y in [0, wallH]
+          actx.fillStyle = '#000000';
+          for (const hole of holes) {
+            const u = (hole.x + wallW / 2) / wallW; // 0..1
+            const v = 1 - (hole.y / wallH); // invert y for canvas
+            const du = hole.w / wallW;
+            const dv = hole.h / wallH;
+            const px = Math.floor((u - du / 2) * alphaCanvas.width);
+            const py = Math.floor((v - dv / 2) * alphaCanvas.height);
+            const pw = Math.ceil(du * alphaCanvas.width);
+            const ph = Math.ceil(dv * alphaCanvas.height);
+            actx.fillRect(px, py, pw, ph);
+          }
+          const alphaTex = new THREE.CanvasTexture(alphaCanvas);
+          alphaTex.wrapS = THREE.ClampToEdgeWrapping;
+          alphaTex.wrapT = THREE.ClampToEdgeWrapping;
+
+          const mapTex = wallTexture.clone();
+          mapTex.needsUpdate = true;
+          const mat = new THREE.MeshLambertMaterial({ map: mapTex, color: 0xaaaaaa, alphaMap: alphaTex, transparent: true });
+          return mat;
+        };
+
+        // Add outdoor backdrop so openings can see outside
+        const addInteriorBackdrop = () => {
+          // Sky dome (backside)
+          const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+          const skyMaterial = new THREE.ShaderMaterial({
+            side: THREE.BackSide,
+            depthWrite: false,
+            uniforms: {
+              topColor: { value: new THREE.Color(0x8ec5ff) },
+              bottomColor: { value: new THREE.Color(0xeef8ff) },
+              offset: { value: 33.0 },
+              exponent: { value: 0.6 }
+            },
+            vertexShader: `
+              varying vec3 vWorldPosition;
+              void main() {
+                vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+                vWorldPosition = worldPosition.xyz;
+                gl_Position = projectionMatrix * viewMatrix * worldPosition;
+              }
+            `,
+            fragmentShader: `
+              uniform vec3 topColor;
+              uniform vec3 bottomColor;
+              uniform float offset;
+              uniform float exponent;
+              varying vec3 vWorldPosition;
+              void main() {
+                float h = normalize(vWorldPosition).y;
+                float t = max(pow(max(h + offset * 0.001, 0.0), exponent), 0.0);
+                vec3 color = mix(bottomColor, topColor, t);
+                gl_FragColor = vec4(color, 1.0);
+              }
+            `
+          });
+          const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+          scene.add(sky);
+
+          // Ground outside
+          const outerGround = new THREE.Mesh(new THREE.PlaneGeometry(300, 240), new THREE.MeshLambertMaterial({ color: 0x2a4d3a }));
+          outerGround.rotation.x = -Math.PI / 2;
+          outerGround.position.y = -0.002; // Slightly below interior floor to avoid z-fighting
+          outerGround.receiveShadow = true;
+          scene.add(outerGround);
+        };
+        addInteriorBackdrop();
+
+        // Define openings
+        const doorWidth = 2.2;
+        const doorHeight = 3.2;
+        const winWidth = 2.0;
+        const winHeight = 1.2;
+        const winY = 3.0;
+        const frontDoorXs = [-5, 0, 5]; // three doors on front
+        const backDoorXs = [0]; // one door on back
+        const backWinXs = [-4.5, 4.5];
+        const sideWinZs = [-3.5, 3.5];
+        const zOffset = 0.015;
+
+        // Front wall with holes
+        const frontHoles = [
+          ...frontDoorXs.map(x => ({ x, y: doorHeight / 2, w: doorWidth, h: doorHeight }))
+        ];
+        const frontWallMat = createWallMaterialWithHoles(16, wallHeight, frontHoles);
+        const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(16, wallHeight), frontWallMat);
+        (frontWall.material as THREE.MeshLambertMaterial).map!.repeat.set(4, 2);
+        frontWall.position.set(0, wallHeight / 2, -6);
         frontWall.receiveShadow = true;
-        // Set texture repeat for front wall
-        wallTexture.repeat.set(4, 2);
         scene.add(frontWall);
         
-        const backWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
-        backWall.position.set(0, wallHeight/2, 6);
+        // Back wall with door + windows
+        const backHoles = [
+          ...backDoorXs.map(x => ({ x, y: doorHeight / 2, w: doorWidth, h: doorHeight })),
+          ...backWinXs.map(x => ({ x, y: winY, w: winWidth, h: winHeight }))
+        ];
+        const backWallMat = createWallMaterialWithHoles(16, wallHeight, backHoles);
+        const backWall = new THREE.Mesh(new THREE.PlaneGeometry(16, wallHeight), backWallMat);
+        (backWall.material as THREE.MeshLambertMaterial).map!.repeat.set(4, 2);
+        backWall.position.set(0, wallHeight / 2, 6);
         backWall.rotation.y = Math.PI;
         backWall.receiveShadow = true;
         scene.add(backWall);
         
-        // Left and right walls
-        const sideWallGeometry = new THREE.PlaneGeometry(12, wallHeight);
-        const leftWall = new THREE.Mesh(sideWallGeometry, wallMaterial);
-        leftWall.position.set(-8, wallHeight/2, 0);
-        leftWall.rotation.y = Math.PI/2;
+        // Left wall with windows
+        // For side walls, local X corresponds to world Z. Place holes at given Z positions.
+        const leftHoles = [
+          ...sideWinZs.map(z => ({ x: z, y: winY, w: winWidth, h: winHeight }))
+        ];
+        const leftWallMat = createWallMaterialWithHoles(12, wallHeight, leftHoles);
+        const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(12, wallHeight), leftWallMat);
+        (leftWall.material as THREE.MeshLambertMaterial).map!.repeat.set(3, 2);
+        leftWall.position.set(-8, wallHeight / 2, 0);
+        leftWall.rotation.y = Math.PI / 2;
         leftWall.receiveShadow = true;
         scene.add(leftWall);
         
-        const rightWall = new THREE.Mesh(sideWallGeometry, wallMaterial);
-        rightWall.position.set(8, wallHeight/2, 0);
-        rightWall.rotation.y = -Math.PI/2;
+        // Right wall with windows
+        const rightHoles = [
+          ...sideWinZs.map(z => ({ x: z, y: winY, w: winWidth, h: winHeight }))
+        ];
+        const rightWallMat = createWallMaterialWithHoles(12, wallHeight, rightHoles);
+        const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(12, wallHeight), rightWallMat);
+        (rightWall.material as THREE.MeshLambertMaterial).map!.repeat.set(3, 2);
+        rightWall.position.set(8, wallHeight / 2, 0);
+        rightWall.rotation.y = -Math.PI / 2;
         rightWall.receiveShadow = true;
         scene.add(rightWall);
+
+        // Helper to add a hinged panel (door or window)
+        const addHingedPanel = (options: {
+          width: number;
+          height: number;
+          position: THREE.Vector3;
+          rotationY: number;
+          hinge: 'left' | 'right';
+          openAngle: number;
+          material: THREE.Material;
+          type: 'door' | 'window';
+          offsetAxis?: 'x' | 'z';
+        }) => {
+          const pivot = new THREE.Group();
+          pivot.position.copy(options.position);
+          scene.add(pivot);
+
+          const panel = new THREE.Mesh(new THREE.PlaneGeometry(options.width, options.height), options.material);
+          panel.rotation.y = options.rotationY;
+          // Place panel so that its left edge is at pivot, then hinge decides sign
+          const edgeSign = options.hinge === 'left' ? 1 : -1;
+          const axis = options.offsetAxis || 'x';
+          if (axis === 'x') {
+            panel.position.x = (options.width / 2) * edgeSign;
+          } else {
+            panel.position.z = (options.width / 2) * edgeSign;
+          }
+          pivot.add(panel);
+
+          // Store animation state on pivot and reference from panel for raycast
+          (pivot as any).userData = { targetAngle: 0, openAngle: options.openAngle * edgeSign };
+          (panel as any).userData = { pivotGroup: pivot, type: options.type };
+          openableRef.current.push(panel);
+
+          return { pivot, panel };
+        };
+
+        // Materials
+        const doorPanelMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
+        const windowPaneMat = new THREE.MeshLambertMaterial({ color: 0x88ccff, transparent: true, opacity: 0.45 });
+
+        // Add multiple front doors (hinge on left)
+        for (const x of frontDoorXs) {
+          addHingedPanel({
+            width: doorWidth,
+            height: doorHeight,
+            position: new THREE.Vector3(x - doorWidth / 2, doorHeight / 2, -6 + zOffset),
+            rotationY: 0,
+            hinge: 'left',
+            openAngle: Math.PI * 0.6,
+            material: doorPanelMat,
+            type: 'door',
+            offsetAxis: 'x'
+          });
+        }
+
+        // Back door at center (hinge on right)
+        for (const x of backDoorXs) {
+          addHingedPanel({
+            width: doorWidth,
+            height: doorHeight,
+            position: new THREE.Vector3(x + doorWidth / 2, doorHeight / 2, 6 - zOffset),
+            rotationY: Math.PI,
+            hinge: 'right',
+            openAngle: Math.PI * 0.6,
+            material: doorPanelMat,
+            type: 'door',
+            offsetAxis: 'x'
+          });
+        }
+
+        // Back windows (hinge left)
+        for (const x of backWinXs) {
+          addHingedPanel({
+            width: winWidth,
+            height: winHeight,
+            position: new THREE.Vector3(x - winWidth / 2, winY, 6 - zOffset),
+            rotationY: Math.PI,
+            hinge: 'left',
+            openAngle: Math.PI * 0.5,
+            material: windowPaneMat,
+            type: 'window',
+            offsetAxis: 'x'
+          });
+        }
+
+        // Left wall windows (facing +x). Panel width extends along +z after rotation, so hinge at lower z
+        for (const z of sideWinZs) {
+          const pivotPos = new THREE.Vector3(-8 + zOffset, winY, z - winWidth / 2);
+          const { panel } = addHingedPanel({
+            width: winWidth,
+            height: winHeight,
+            position: pivotPos,
+            rotationY: Math.PI / 2,
+            hinge: 'left',
+            openAngle: Math.PI * 0.5,
+            material: windowPaneMat,
+            type: 'window',
+            offsetAxis: 'z'
+          });
+          // Adjust local placement for side wall: move along local X (which is world Z after rotation)
+        }
+
+        // Right wall windows (facing -x). Hinge at higher z edge
+        for (const z of sideWinZs) {
+          const pivotPos = new THREE.Vector3(8 - zOffset, winY, z + winWidth / 2);
+          addHingedPanel({
+            width: winWidth,
+            height: winHeight,
+            position: pivotPos,
+            rotationY: -Math.PI / 2,
+            hinge: 'right',
+            openAngle: Math.PI * 0.5,
+            material: windowPaneMat,
+            type: 'window',
+            offsetAxis: 'z'
+          });
+        }
+
+        // Interior click handler to toggle doors/windows
+        const handleInteriorClick = (event: MouseEvent) => {
+          if (currentSceneRef.current !== 'interior') return;
+          if (!raycastRef.current || !mouseRef.current || !cameraRef.current || !sceneRef.current || !rendererRef.current) return;
+          const rect = rendererRef.current.domElement.getBoundingClientRect();
+          mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+          raycastRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+          const intersects = raycastRef.current.intersectObjects(openableRef.current, true);
+          if (intersects.length > 0) {
+            const obj = intersects[0].object as THREE.Mesh;
+            const pivot = (obj as any).userData?.pivotGroup as THREE.Group | undefined;
+            if (pivot) {
+              const ud = (pivot as any).userData || { targetAngle: 0, openAngle: Math.PI * 0.6 };
+              const isClosed = Math.abs(ud.targetAngle) < 1e-3;
+              (pivot as any).userData.targetAngle = isClosed ? ud.openAngle : 0;
+            }
+          }
+        };
+        if (rendererRef.current) {
+          rendererRef.current.domElement.addEventListener('click', handleInteriorClick);
+          interiorClickHandlerRef.current = handleInteriorClick;
+        }
         
         // Roof structure - industrial style with trusses
         const roofGeometry = new THREE.PlaneGeometry(16, 12);
@@ -1344,6 +1618,81 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
           const poolRows = 3;
           const poolCols = 4;
           const poolSpacing = 3;
+
+          // Walkways between pools (grated texture)
+          const createGratingTexture = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d')!;
+            // Base
+            ctx.fillStyle = '#5a5f63';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Slot pattern
+            ctx.fillStyle = '#3c4043';
+            const slotW = 14; // slot width
+            const slotH = 4;  // slot height
+            for (let y = 12; y < canvas.height; y += 20) {
+              for (let x = 8; x < canvas.width; x += 24) {
+                ctx.fillRect(x, y, slotW, slotH);
+              }
+            }
+            // Edge highlights
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            for (let y = 0; y <= canvas.height; y += 20) {
+              ctx.beginPath();
+              ctx.moveTo(0, y);
+              ctx.lineTo(canvas.width, y);
+              ctx.stroke();
+            }
+            // Dirt/wear
+            ctx.fillStyle = 'rgba(0,0,0,0.08)';
+            for (let i = 0; i < 30; i++) {
+              const x = Math.random() * canvas.width;
+              const y = Math.random() * canvas.height;
+              const r = 1 + Math.random() * 2;
+              ctx.beginPath();
+              ctx.arc(x, y, r, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(2, 2);
+            return tex;
+          };
+
+          const walkwayMaterial = new THREE.MeshLambertMaterial({ map: createGratingTexture(), color: 0x6a7075 });
+          const walkwayHeight = 0.021; // slightly above floor
+          const walkwayWidth = 0.9;
+
+          const addWalkways = (rows: number, cols: number, spacing: number) => {
+            // Vertical walkways between columns: x positions at midpoints
+            for (let c = 0; c < cols - 1; c++) {
+              const x = ((c + 0.5) - (cols - 1) / 2) * spacing;
+              const length = (rows - 1) * spacing + 4.0; // span rows + margins
+              const geo = new THREE.PlaneGeometry(walkwayWidth, length);
+              const mesh = new THREE.Mesh(geo, walkwayMaterial);
+              mesh.rotation.x = -Math.PI / 2;
+              mesh.position.set(x, walkwayHeight, 0);
+              mesh.receiveShadow = true;
+              scene.add(mesh);
+            }
+            // Horizontal walkways between rows: z positions at midpoints
+            for (let r = 0; r < rows - 1; r++) {
+              const z = ((r + 0.5) - (rows - 1) / 2) * spacing;
+              const length = (cols - 1) * spacing + 6.0; // span cols + margins
+              const geo = new THREE.PlaneGeometry(length, walkwayWidth);
+              const mesh = new THREE.Mesh(geo, walkwayMaterial);
+              mesh.rotation.x = -Math.PI / 2;
+              mesh.position.set(0, walkwayHeight, z);
+              mesh.receiveShadow = true;
+              scene.add(mesh);
+            }
+            // Perimeter short pads near door paths (optional): small pieces at ends
+          };
+
+          addWalkways(poolRows, poolCols, poolSpacing);
           
           for (let row = 0; row < poolRows; row++) {
             for (let col = 0; col < poolCols; col++) {

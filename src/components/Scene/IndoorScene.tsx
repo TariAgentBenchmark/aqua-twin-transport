@@ -146,6 +146,111 @@ export class IndoorScene {
     rightWall.rotation.y = -Math.PI/2;
     rightWall.receiveShadow = true;
     this.scene.add(rightWall);
+
+    // Add door on front wall and windows on side/back walls
+    this.addDoorAndWindows(wallHeight);
+  }
+
+  private addDoorAndWindows(wallHeight: number): void {
+    // Door on the front wall (z = -6)
+    const doorWidth = 2.2;
+    const doorHeight = 3.2;
+    const zOffset = 0.015; // avoid z-fighting
+    const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+    const doorPanel = new THREE.Mesh(new THREE.PlaneGeometry(doorWidth, doorHeight), doorMaterial);
+    doorPanel.position.set(0, doorHeight / 2, -6 + zOffset);
+    this.scene.add(doorPanel);
+
+    // Door frame
+    const frameDepth = 0.05;
+    const frameThickness = 0.1;
+    const frameMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+    const topFrame = new THREE.Mesh(new THREE.BoxGeometry(doorWidth + frameThickness * 2, frameThickness, frameDepth), frameMaterial);
+    topFrame.position.set(0, doorHeight + frameThickness / 2, -6 + zOffset + 0.002);
+    const leftFrame = new THREE.Mesh(new THREE.BoxGeometry(frameThickness, doorHeight, frameDepth), frameMaterial);
+    leftFrame.position.set(-(doorWidth / 2 + frameThickness / 2), doorHeight / 2, -6 + zOffset + 0.002);
+    const rightFrame = new THREE.Mesh(new THREE.BoxGeometry(frameThickness, doorHeight, frameDepth), frameMaterial);
+    rightFrame.position.set(doorWidth / 2 + frameThickness / 2, doorHeight / 2, -6 + zOffset + 0.002);
+    this.scene.add(topFrame);
+    this.scene.add(leftFrame);
+    this.scene.add(rightFrame);
+
+    // Simple handle
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.12, 8), new THREE.MeshLambertMaterial({ color: 0x999999 }));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(doorWidth / 2 - 0.25, doorHeight * 0.5, -6 + zOffset + 0.01);
+    this.scene.add(handle);
+
+    // Windows on side and back walls
+    const glassMaterial = new THREE.MeshLambertMaterial({ color: 0x88ccff, transparent: true, opacity: 0.45 });
+    const windowWidth = 2.0;
+    const windowHeight = 1.2;
+    const windowY = 3.0;
+    const windowZPositions = [-3.5, 3.5];
+
+    const addWindowFrame = (pane: THREE.Mesh) => {
+      const fm = new THREE.MeshLambertMaterial({ color: 0x333333 });
+      const fDepth = 0.04;
+      const t = 0.08;
+      const p = pane.position.clone();
+      const isFrontBack = Math.abs(p.z) > Math.abs(p.x);
+      const z = p.z;
+      const x = p.x;
+      const y = p.y;
+      if (isFrontBack) {
+        const top = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + t * 2, t, fDepth), fm);
+        top.position.set(x, y + windowHeight / 2 + t / 2, z + (z > 0 ? -0.002 : 0.002));
+        const bottom = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + t * 2, t, fDepth), fm);
+        bottom.position.set(x, y - windowHeight / 2 - t / 2, z + (z > 0 ? -0.002 : 0.002));
+        const left = new THREE.Mesh(new THREE.BoxGeometry(t, windowHeight, fDepth), fm);
+        left.position.set(x - windowWidth / 2 - t / 2, y, z + (z > 0 ? -0.002 : 0.002));
+        const right = new THREE.Mesh(new THREE.BoxGeometry(t, windowHeight, fDepth), fm);
+        right.position.set(x + windowWidth / 2 + t / 2, y, z + (z > 0 ? -0.002 : 0.002));
+        this.scene.add(top, bottom, left, right);
+      } else {
+        const depthAlongX = fDepth;
+        const top = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + t * 2, t, depthAlongX), fm);
+        top.rotation.y = pane.rotation.y;
+        top.position.set(x + (x > 0 ? -0.002 : 0.002), y + windowHeight / 2 + t / 2, z);
+        const bottom = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + t * 2, t, depthAlongX), fm);
+        bottom.rotation.y = pane.rotation.y;
+        bottom.position.set(x + (x > 0 ? -0.002 : 0.002), y - windowHeight / 2 - t / 2, z);
+        const left = new THREE.Mesh(new THREE.BoxGeometry(t, windowHeight, depthAlongX), fm);
+        left.rotation.y = pane.rotation.y;
+        left.position.set(x + (x > 0 ? -0.002 : 0.002), y, z - windowWidth / 2 - t / 2);
+        const right = new THREE.Mesh(new THREE.BoxGeometry(t, windowHeight, depthAlongX), fm);
+        right.rotation.y = pane.rotation.y;
+        right.position.set(x + (x > 0 ? -0.002 : 0.002), y, z + windowWidth / 2 + t / 2);
+        this.scene.add(top, bottom, left, right);
+      }
+    };
+
+    // Left wall windows (x = -8)
+    for (const z of windowZPositions) {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(windowWidth, windowHeight), glassMaterial);
+      pane.rotation.y = Math.PI / 2;
+      pane.position.set(-8 + 0.015, windowY, z);
+      this.scene.add(pane);
+      addWindowFrame(pane);
+    }
+
+    // Right wall windows (x = 8)
+    for (const z of windowZPositions) {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(windowWidth, windowHeight), glassMaterial);
+      pane.rotation.y = -Math.PI / 2;
+      pane.position.set(8 - 0.015, windowY, z);
+      this.scene.add(pane);
+      addWindowFrame(pane);
+    }
+
+    // Back wall windows (z = 6)
+    for (const x of [-4.5, 4.5]) {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(windowWidth, windowHeight), glassMaterial);
+      pane.rotation.y = Math.PI;
+      pane.position.set(x, windowY, 6 - 0.015);
+      this.scene.add(pane);
+      addWindowFrame(pane);
+    }
   }
 
   private createWallTexture(): THREE.CanvasTexture {
@@ -260,9 +365,11 @@ export class IndoorScene {
           '/models/fish.glb'
         ]);
         this.createPoolGrid(poolModel, fishModel, poolRows, poolCols, poolSpacing, poolScale, fishPerPool, fishScale);
+        this.createWalkwaysBetweenPools(poolRows, poolCols, poolSpacing);
       } catch (error) {
         console.error('Failed to load pool/fish models, using fallback:', error);
         this.createFallbackPoolsAndFish(poolRows, poolCols, poolSpacing, fishPerPool);
+        this.createWalkwaysBetweenPools(poolRows, poolCols, poolSpacing);
       }
     } else {
       this.createFallbackPoolsAndFish(poolRows, poolCols, poolSpacing, fishPerPool);
@@ -392,6 +499,75 @@ export class IndoorScene {
         }
       }
     }
+  }
+
+  private createWalkwaysBetweenPools(rows: number, cols: number, spacing: number): void {
+    const texture = this.createGratingTexture();
+    const walkwayMaterial = new THREE.MeshLambertMaterial({ map: texture, color: 0x6a7075 });
+    const walkwayHeight = 0.021;
+    const walkwayWidth = 0.9;
+
+    // Vertical walkways between columns
+    for (let c = 0; c < cols - 1; c++) {
+      const x = ((c + 0.5) - (cols - 1) / 2) * spacing;
+      const length = (rows - 1) * spacing + 4.0;
+      const geo = new THREE.PlaneGeometry(walkwayWidth, length);
+      const mesh = new THREE.Mesh(geo, walkwayMaterial);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, walkwayHeight, 0);
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    }
+
+    // Horizontal walkways between rows
+    for (let r = 0; r < rows - 1; r++) {
+      const z = ((r + 0.5) - (rows - 1) / 2) * spacing;
+      const length = (cols - 1) * spacing + 6.0;
+      const geo = new THREE.PlaneGeometry(length, walkwayWidth);
+      const mesh = new THREE.Mesh(geo, walkwayMaterial);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(0, walkwayHeight, z);
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    }
+  }
+
+  private createGratingTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#5a5f63';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#3c4043';
+    const slotW = 14;
+    const slotH = 4;
+    for (let y = 12; y < canvas.height; y += 20) {
+      for (let x = 8; x < canvas.width; x += 24) {
+        ctx.fillRect(x, y, slotW, slotH);
+      }
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    for (let y = 0; y <= canvas.height; y += 20) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let i = 0; i < 30; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const r = 1 + Math.random() * 2;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 2);
+    return tex;
   }
 
   public animateFish(time: number): void {
