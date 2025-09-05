@@ -23,6 +23,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const farmBuildingsRef = useRef<THREE.Group[]>([]);
   const fishArrayRef = useRef<THREE.Object3D[]>([]);
+  const cloudSpritesRef = useRef<THREE.Sprite[]>([]);
   const raycastRef = useRef<THREE.Raycaster | null>(null);
   const mouseRef = useRef<THREE.Vector2 | null>(null);
   const currentSceneRef = useRef<'exterior' | 'interior' | 'transitioning'>('exterior');
@@ -152,6 +153,275 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
     raycastRef.current = raycaster;
     mouseRef.current = mouse;
 
+    // --- Helpers: Exterior environment (sky, clouds, roads, steps) ---
+    const addExteriorEnvironment = () => {
+      // Subtle outdoor fog blending distant ground into sky
+      scene.fog = new THREE.Fog(0x87ceeb, 30, 120);
+
+      // Big gradient sky dome (backside)
+      const createSkyDome = () => {
+        const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+        const skyMaterial = new THREE.ShaderMaterial({
+          side: THREE.BackSide,
+          depthWrite: false,
+          uniforms: {
+            topColor: { value: new THREE.Color(0x8ec5ff) },
+            bottomColor: { value: new THREE.Color(0xeef8ff) },
+            offset: { value: 33.0 },
+            exponent: { value: 0.6 }
+          },
+          vertexShader: `
+            varying vec3 vWorldPosition;
+            void main() {
+              vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+              vWorldPosition = worldPosition.xyz;
+              gl_Position = projectionMatrix * viewMatrix * worldPosition;
+            }
+          `,
+          fragmentShader: `
+            uniform vec3 topColor;
+            uniform vec3 bottomColor;
+            uniform float offset;
+            uniform float exponent;
+            varying vec3 vWorldPosition;
+            void main() {
+              float h = normalize(vWorldPosition).y;
+              float t = max(pow(max(h + offset * 0.001, 0.0), exponent), 0.0);
+              vec3 color = mix(bottomColor, topColor, t);
+              gl_FragColor = vec4(color, 1.0);
+            }
+          `
+        });
+        const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+        scene.add(sky);
+      };
+
+      // Generate a soft cloud texture via canvas
+      const createCloudTexture = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d')!;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.globalAlpha = 0.7;
+
+        // Draw several blurred circles to form a fluffy cloud
+        const drawPuff = (x: number, y: number, r: number) => {
+          const grad = ctx.createRadialGradient(x, y, r * 0.2, x, y, r);
+          grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+          grad.addColorStop(1, 'rgba(255,255,255,0.0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        };
+
+        const baseX = 90 + Math.random() * 40;
+        const baseY = 60 + Math.random() * 10;
+        drawPuff(baseX, baseY, 50);
+        drawPuff(baseX - 35, baseY + 5, 35);
+        drawPuff(baseX + 35, baseY + 10, 40);
+        drawPuff(baseX, baseY + 15, 30);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        texture.wrapS = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        return texture;
+      };
+
+      const createClouds = () => {
+        const cloudsToCreate = 14;
+        for (let i = 0; i < cloudsToCreate; i++) {
+          const tex = createCloudTexture();
+          const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.85 });
+          const sprite = new THREE.Sprite(mat);
+          const scale = 6 + Math.random() * 6;
+          sprite.scale.set(scale, scale * 0.5, 1);
+          sprite.position.set(
+            -60 + Math.random() * 120,
+            9 + Math.random() * 6,
+            -40 + Math.random() * 80
+          );
+          // Drift direction and speed
+          const dir = Math.random() > 0.5 ? 1 : -1;
+          sprite.userData = { speed: dir * (0.02 + Math.random() * 0.03), direction: dir };
+          cloudSpritesRef.current.push(sprite);
+          scene.add(sprite);
+        }
+      };
+
+      const createFootpathNetwork = () => {
+        // Create a realistic stone path texture
+        const createStonePathTexture = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 256;
+          canvas.height = 256;
+          const ctx = canvas.getContext('2d')!;
+
+          // Base dirt/earth color
+          ctx.fillStyle = '#8b7355';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Add dirt texture noise
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          for (let i = 0; i < data.length; i += 4) {
+            const noise = (Math.random() - 0.5) * 25;
+            data[i] = Math.max(50, Math.min(200, data[i] + noise));
+            data[i + 1] = Math.max(40, Math.min(180, data[i + 1] + noise));
+            data[i + 2] = Math.max(30, Math.min(160, data[i + 2] + noise));
+          }
+          ctx.putImageData(imageData, 0, 0);
+
+          // Scatter flat stones
+          const stoneColors = ['#a5967d', '#9a8b72', '#8f8067', '#b0a18e', '#95866d'];
+          for (let i = 0; i < 80; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            const w = 8 + Math.random() * 12;
+            const h = 6 + Math.random() * 10;
+            
+            ctx.fillStyle = stoneColors[Math.floor(Math.random() * stoneColors.length)];
+            ctx.save();
+            ctx.translate(x + w/2, y + h/2);
+            ctx.rotate(Math.random() * Math.PI * 2);
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Stone edge highlight
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillRect(-w/2, -h/2, w, 1);
+            ctx.fillRect(-w/2, -h/2, 1, h);
+            
+            // Stone edge shadow  
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(-w/2, h/2-1, w, 1);
+            ctx.fillRect(w/2-1, -h/2, 1, h);
+            
+            ctx.restore();
+          }
+
+          // Add some wear and moss
+          for (let i = 0; i < 20; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            
+            // Moss patches
+            if (Math.random() > 0.6) {
+              ctx.fillStyle = 'rgba(70, 90, 50, 0.25)';
+              ctx.beginPath();
+              ctx.arc(x, y, 4 + Math.random() * 6, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+
+          const texture = new THREE.CanvasTexture(canvas);
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.repeat.set(6, 6);
+          return texture;
+        };
+
+        const pathTexture = createStonePathTexture();
+        const pathMaterial = new THREE.MeshLambertMaterial({ 
+          map: pathTexture,
+          transparent: false 
+        });
+
+        // Create flat stone path segments between farm buildings
+        const pathHeight = 0.01;
+        const pathWidth = 0.8;
+        
+        // Farm building positions are at x,z = -2.5, 0, 2.5 with spacing 2.5
+        // Create straight path segments between buildings
+        
+        // Horizontal paths between building rows
+        const horizontalZ = [-1.25, 1.25]; // midway between building rows
+        horizontalZ.forEach((z) => {
+          // Left to right path segments with small gaps for natural look
+          for (let x = -6; x <= 6; x += 1.5) {
+            const segmentLength = 1.2 + Math.random() * 0.3;
+            const pathGeometry = new THREE.PlaneGeometry(segmentLength, pathWidth);
+            const path = new THREE.Mesh(pathGeometry, pathMaterial);
+            path.rotation.x = -Math.PI / 2;
+            path.position.set(x + Math.random() * 0.1 - 0.05, pathHeight, z + Math.random() * 0.05 - 0.025);
+            path.receiveShadow = true;
+            scene.add(path);
+          }
+        });
+
+        // Vertical paths between building columns  
+        const verticalX = [-1.25, 1.25]; // midway between building columns
+        verticalX.forEach((x) => {
+          // Top to bottom path segments
+          for (let z = -5; z <= 5; z += 1.5) {
+            const segmentLength = 1.2 + Math.random() * 0.3;
+            const pathGeometry = new THREE.PlaneGeometry(pathWidth, segmentLength);
+            const path = new THREE.Mesh(pathGeometry, pathMaterial);
+            path.rotation.x = -Math.PI / 2;
+            path.position.set(x + Math.random() * 0.05 - 0.025, pathHeight, z + Math.random() * 0.1 - 0.05);
+            path.receiveShadow = true;
+            scene.add(path);
+          }
+        });
+
+        // Main access paths leading to center from outside
+        const createAccessPath = (startX: number, startZ: number, endX: number, endZ: number) => {
+          const segments = 8;
+          for (let i = 0; i < segments; i++) {
+            const progress = i / (segments - 1);
+            const x = startX + (endX - startX) * progress;
+            const z = startZ + (endZ - startZ) * progress;
+            
+            const angle = Math.atan2(endZ - startZ, endX - startX);
+            const segmentLength = 1.0 + Math.random() * 0.4;
+            
+            const pathGeometry = new THREE.PlaneGeometry(segmentLength, pathWidth);
+            const path = new THREE.Mesh(pathGeometry, pathMaterial);
+            path.rotation.x = -Math.PI / 2;
+            path.rotation.z = angle;
+            path.position.set(x, pathHeight, z);
+            path.receiveShadow = true;
+            scene.add(path);
+          }
+        };
+
+        // Create main access paths from cardinal directions
+        createAccessPath(-8, 0, -3.5, 0);  // West entrance
+        createAccessPath(8, 0, 3.5, 0);    // East entrance
+        createAccessPath(0, -7, 0, -3.5);  // South entrance
+        createAccessPath(0, 7, 0, 3.5);    // North entrance
+        
+        // Add some decorative stepping stones around the paths
+        for (let i = 0; i < 12; i++) {
+          const x = (Math.random() - 0.5) * 12;
+          const z = (Math.random() - 0.5) * 10;
+          
+          // Skip if too close to building centers
+          const tooClose = [-2.5, 0, 2.5].some(buildingX => 
+            [-2.5, 0, 2.5].some(buildingZ => 
+              Math.sqrt((x - buildingX) ** 2 + (z - buildingZ) ** 2) < 1.5
+            )
+          );
+          
+          if (!tooClose) {
+            const stoneSize = 0.3 + Math.random() * 0.2;
+            const stoneGeometry = new THREE.PlaneGeometry(stoneSize, stoneSize);
+            const stone = new THREE.Mesh(stoneGeometry, pathMaterial);
+            stone.rotation.x = -Math.PI / 2;
+            stone.rotation.z = Math.random() * Math.PI * 2;
+            stone.position.set(x, pathHeight + 0.002, z);
+            stone.receiveShadow = true;
+            scene.add(stone);
+          }
+        }
+      };
+
+      createSkyDome();
+      createClouds();
+      createFootpathNetwork();
+    };
+
     // Create ground plane
     const groundGeometry = new THREE.PlaneGeometry(100, 80);
     const groundMaterial = new THREE.MeshLambertMaterial({ 
@@ -180,6 +450,9 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
     directionalLight.shadow.camera.top = 50;
     directionalLight.shadow.camera.bottom = -50;
     scene.add(directionalLight);
+
+    // Add exterior environment elements
+    addExteriorEnvironment();
 
     // Position camera for optimal initial view of farm buildings - very close horizontal view (~20 degrees)
     camera.position.set(5, 1.75, 5); // Half the distance, maintaining 20 degree angle
@@ -268,40 +541,48 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
         const fallbackTreeGeometry = new THREE.ConeGeometry(0.3, 1.5, 6);
         const fallbackTreeMaterial = new THREE.MeshLambertMaterial({ color: 0x2d5d2d });
         
-        const farmAreaSize = 8; // Size to contain the 3x3 farm buildings
-        const treeSpacing = 1.8; // Tight spacing between trees
-        const ringGap = 2.2; // Distance between each tree ring
+                 const farmAreaSize = 6; // Closer to contain the 3x3 farm buildings
+         const treeSpacing = 0.8; // Ultra dense spacing between trees
+         const ringGap = 1.6; // Smaller distance between each tree ring
         
         // Create 4 concentric rectangular rings as fallback
         for (let ring = 0; ring < 4; ring++) {
           const ringSize = farmAreaSize + (ring + 1) * ringGap;
           const halfSize = ringSize / 2;
 
-          // Top and bottom rows for this ring
-          for (let x = -halfSize; x <= halfSize; x += treeSpacing) {
-            // Top row
-            const topTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
-            topTree.position.set(x, 0.75, halfSize); // Position on ground
-            scene.add(topTree);
+                     // Top and bottom rows for this ring
+           for (let x = -halfSize; x <= halfSize; x += treeSpacing) {
+             // Top row
+             const topTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
+             const offsetX = x + (Math.random() - 0.5) * 0.4;
+             const offsetZ = halfSize + (Math.random() - 0.5) * 0.3;
+             topTree.position.set(offsetX, 0.75, offsetZ);
+             scene.add(topTree);
 
-            // Bottom row
-            const bottomTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
-            bottomTree.position.set(x, 0.75, -halfSize); // Position on ground
-            scene.add(bottomTree);
-          }
+             // Bottom row
+             const bottomTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
+             const offsetX2 = x + (Math.random() - 0.5) * 0.4;
+             const offsetZ2 = -halfSize + (Math.random() - 0.5) * 0.3;
+             bottomTree.position.set(offsetX2, 0.75, offsetZ2);
+             scene.add(bottomTree);
+           }
 
-          // Left and right columns for this ring (excluding corners already filled)
-          for (let z = -halfSize + treeSpacing; z < halfSize; z += treeSpacing) {
-            // Left column
-            const leftTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
-            leftTree.position.set(-halfSize, 0.75, z); // Position on ground
-            scene.add(leftTree);
+           // Left and right columns for this ring (excluding corners already filled)
+           for (let z = -halfSize + treeSpacing; z < halfSize; z += treeSpacing) {
+             // Left column
+             const leftTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
+             const offsetX3 = -halfSize + (Math.random() - 0.5) * 0.3;
+             const offsetZ3 = z + (Math.random() - 0.5) * 0.4;
+             leftTree.position.set(offsetX3, 0.75, offsetZ3);
+             scene.add(leftTree);
 
-            // Right column
-            const rightTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
-            rightTree.position.set(halfSize, 0.75, z); // Position on ground
-            scene.add(rightTree);
-          }
+             // Right column
+             const rightTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
+             const offsetX4 = halfSize + (Math.random() - 0.5) * 0.3;
+             const offsetZ4 = z + (Math.random() - 0.5) * 0.4;
+             rightTree.position.set(offsetX4, 0.75, offsetZ4);
+             scene.add(rightTree);
+           }
         }
         
         console.log('Fallback trees created');
@@ -321,10 +602,10 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
           }, undefined, reject);
         });
 
-        // Create 4 concentric rings of trees around the farm area
-        const farmAreaSize = 8; // Size to contain the 3x3 farm buildings
-        const treeSpacing = 1.8; // Tight spacing between trees
-        const ringGap = 2.2; // Distance between each tree ring
+                 // Create 4 concentric rings of trees around the farm area
+         const farmAreaSize = 6; // Closer to contain the 3x3 farm buildings
+         const treeSpacing = 0.8; // Ultra dense spacing between trees
+         const ringGap = 1.6; // Smaller distance between each tree ring
 
         // Helper function to position tree on ground
         const positionTreeOnGround = (tree: THREE.Group, x: number, z: number) => {
@@ -338,47 +619,55 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
           const ringSize = farmAreaSize + (ring + 1) * ringGap;
           const halfSize = ringSize / 2;
 
-          // Top and bottom rows for this ring
-          for (let x = -halfSize; x <= halfSize; x += treeSpacing) {
-            // Top row
-            const topTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
-            topTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
-            topTree.rotation.y = Math.random() * Math.PI * 2;
-            positionTreeOnGround(topTree, x, halfSize);
-            topTree.castShadow = true;
-            topTree.receiveShadow = true;
-            scene.add(topTree);
+                     // Top and bottom rows for this ring
+           for (let x = -halfSize; x <= halfSize; x += treeSpacing) {
+             // Top row
+             const topTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             topTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
+             topTree.rotation.y = Math.random() * Math.PI * 2;
+             const offsetX = x + (Math.random() - 0.5) * 0.4;
+             const offsetZ = halfSize + (Math.random() - 0.5) * 0.3;
+             positionTreeOnGround(topTree, offsetX, offsetZ);
+             topTree.castShadow = true;
+             topTree.receiveShadow = true;
+             scene.add(topTree);
 
-            // Bottom row
-            const bottomTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
-            bottomTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
-            bottomTree.rotation.y = Math.random() * Math.PI * 2;
-            positionTreeOnGround(bottomTree, x, -halfSize);
-            bottomTree.castShadow = true;
-            bottomTree.receiveShadow = true;
-            scene.add(bottomTree);
-          }
+             // Bottom row
+             const bottomTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             bottomTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
+             bottomTree.rotation.y = Math.random() * Math.PI * 2;
+             const offsetX2 = x + (Math.random() - 0.5) * 0.4;
+             const offsetZ2 = -halfSize + (Math.random() - 0.5) * 0.3;
+             positionTreeOnGround(bottomTree, offsetX2, offsetZ2);
+             bottomTree.castShadow = true;
+             bottomTree.receiveShadow = true;
+             scene.add(bottomTree);
+           }
 
-          // Left and right columns for this ring (excluding corners already filled)
-          for (let z = -halfSize + treeSpacing; z < halfSize; z += treeSpacing) {
-            // Left column
-            const leftTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
-            leftTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
-            leftTree.rotation.y = Math.random() * Math.PI * 2;
-            positionTreeOnGround(leftTree, -halfSize, z);
-            leftTree.castShadow = true;
-            leftTree.receiveShadow = true;
-            scene.add(leftTree);
+           // Left and right columns for this ring (excluding corners already filled)
+           for (let z = -halfSize + treeSpacing; z < halfSize; z += treeSpacing) {
+             // Left column
+             const leftTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             leftTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
+             leftTree.rotation.y = Math.random() * Math.PI * 2;
+             const offsetX3 = -halfSize + (Math.random() - 0.5) * 0.3;
+             const offsetZ3 = z + (Math.random() - 0.5) * 0.4;
+             positionTreeOnGround(leftTree, offsetX3, offsetZ3);
+             leftTree.castShadow = true;
+             leftTree.receiveShadow = true;
+             scene.add(leftTree);
 
-            // Right column
-            const rightTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
-            rightTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
-            rightTree.rotation.y = Math.random() * Math.PI * 2;
-            positionTreeOnGround(rightTree, halfSize, z);
-            rightTree.castShadow = true;
-            rightTree.receiveShadow = true;
-            scene.add(rightTree);
-          }
+             // Right column
+             const rightTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             rightTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
+             rightTree.rotation.y = Math.random() * Math.PI * 2;
+             const offsetX4 = halfSize + (Math.random() - 0.5) * 0.3;
+             const offsetZ4 = z + (Math.random() - 0.5) * 0.4;
+             positionTreeOnGround(rightTree, offsetX4, offsetZ4);
+             rightTree.castShadow = true;
+             rightTree.receiveShadow = true;
+             scene.add(rightTree);
+           }
         }
 
         console.log('Trees loaded and positioned successfully');
@@ -486,6 +775,19 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
       
       time += 0.01;
       
+      // Drift cloud sprites in exterior scene
+      if (currentSceneRef.current === 'exterior') {
+        for (const sprite of cloudSpritesRef.current) {
+          const speed = (sprite.userData?.speed as number) || 0.02;
+          sprite.position.x += speed;
+          // Gentle vertical sway
+          sprite.position.y += Math.sin(time * 0.2 + sprite.position.x * 0.05) * 0.002;
+          // Wrap around
+          if (sprite.position.x > 80) sprite.position.x = -80;
+          if (sprite.position.x < -80) sprite.position.x = 80;
+        }
+      }
+
       // Handle camera transition animation
       if (transitionRef.current.isTransitioning) {
         const elapsed = Date.now() - transitionRef.current.startTime;
@@ -689,6 +991,9 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
         while(scene.children.length > 0) {
           scene.remove(scene.children[0]);
         }
+
+        // Disable exterior fog when entering interior
+        scene.fog = null;
 
         // Add interior lighting with ceiling lights and subtle shadows
         const wallHeight = 6; // Define wall height first
