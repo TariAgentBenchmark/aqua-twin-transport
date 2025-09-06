@@ -131,11 +131,8 @@ export class OutdoorScene {
 
     if (enableModelLoader) {
       try {
-        const [treeModel, pineModel] = await this.modelLoader.loadMultipleModels([
-          '/models/tree.glb',
-          '/models/pine.glb'
-        ]);
-        this.createTreeRings(treeModel, pineModel, treeRings, treeSpacing);
+        const pineModel = await this.modelLoader.loadModel('/models/pine.glb');
+        this.createTreeRings(pineModel, treeRings, treeSpacing);
       } catch (error) {
         console.error('Failed to load tree models, using fallback:', error);
         this.createFallbackTrees(treeRings, treeSpacing);
@@ -146,7 +143,6 @@ export class OutdoorScene {
   }
 
   private createTreeRings(
-    treeModel: THREE.Group,
     pineModel: THREE.Group,
     rings: number,
     spacing: number
@@ -160,25 +156,24 @@ export class OutdoorScene {
 
       // Top and bottom rows
       for (let x = -halfSize; x <= halfSize; x += spacing) {
-        this.createTree(treeModel, pineModel, x, halfSize);
-        this.createTree(treeModel, pineModel, x, -halfSize);
+        this.createTree(pineModel, x, halfSize);
+        this.createTree(pineModel, x, -halfSize);
       }
 
       // Left and right columns (excluding corners)
       for (let z = -halfSize + spacing; z < halfSize; z += spacing) {
-        this.createTree(treeModel, pineModel, -halfSize, z);
-        this.createTree(treeModel, pineModel, halfSize, z);
+        this.createTree(pineModel, -halfSize, z);
+        this.createTree(pineModel, halfSize, z);
       }
     }
   }
 
   private createTree(
-    treeModel: THREE.Group,
     pineModel: THREE.Group,
     x: number,
     z: number
   ): void {
-    const tree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+    const tree = pineModel.clone();
     tree.scale.setScalar(0.3 + Math.random() * 0.2);
     tree.rotation.y = Math.random() * Math.PI * 2;
     

@@ -30,6 +30,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
   const mouseRef = useRef<THREE.Vector2 | null>(null);
   const currentSceneRef = useRef<'exterior' | 'interior' | 'transitioning'>('exterior');
   const controlsRef = useRef<any>(null);
+  const pathMeshesRef = useRef<THREE.Mesh[]>([]);
   
   // Animation state for smooth transitions
   const transitionRef = useRef({
@@ -349,6 +350,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
             path.position.set(x + Math.random() * 0.1 - 0.05, pathHeight, z + Math.random() * 0.05 - 0.025);
             path.receiveShadow = true;
             scene.add(path);
+            pathMeshesRef.current.push(path);
           }
         });
 
@@ -364,6 +366,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
             path.position.set(x + Math.random() * 0.05 - 0.025, pathHeight, z + Math.random() * 0.1 - 0.05);
             path.receiveShadow = true;
             scene.add(path);
+            pathMeshesRef.current.push(path);
           }
         });
 
@@ -385,6 +388,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
             path.position.set(x, pathHeight, z);
             path.receiveShadow = true;
             scene.add(path);
+            pathMeshesRef.current.push(path);
           }
         };
 
@@ -415,6 +419,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
             stone.position.set(x, pathHeight + 0.002, z);
             stone.receiveShadow = true;
             scene.add(stone);
+            pathMeshesRef.current.push(stone as unknown as THREE.Mesh);
           }
         }
       };
@@ -547,6 +552,15 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
          const treeSpacing = 0.8; // Ultra dense spacing between trees
          const ringGap = 1.6; // Smaller distance between each tree ring
         
+        // Precompute path bounding boxes for tree avoidance
+        const pathBoxes = pathMeshesRef.current.map(mesh => new THREE.Box3().setFromObject(mesh));
+        const isOnPath = (x: number, z: number) => {
+          for (const box of pathBoxes) {
+            if (x >= box.min.x && x <= box.max.x && z >= box.min.z && z <= box.max.z) return true;
+          }
+          return false;
+        };
+
         // Create 4 concentric rectangular rings as fallback
         for (let ring = 0; ring < 4; ring++) {
           const ringSize = farmAreaSize + (ring + 1) * ringGap;
@@ -559,14 +573,14 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX = x + (Math.random() - 0.5) * 0.4;
              const offsetZ = halfSize + (Math.random() - 0.5) * 0.3;
              topTree.position.set(offsetX, 0.75, offsetZ);
-             scene.add(topTree);
+             if (!isOnPath(offsetX, offsetZ)) scene.add(topTree);
 
              // Bottom row
              const bottomTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
              const offsetX2 = x + (Math.random() - 0.5) * 0.4;
              const offsetZ2 = -halfSize + (Math.random() - 0.5) * 0.3;
              bottomTree.position.set(offsetX2, 0.75, offsetZ2);
-             scene.add(bottomTree);
+             if (!isOnPath(offsetX2, offsetZ2)) scene.add(bottomTree);
            }
 
            // Left and right columns for this ring (excluding corners already filled)
@@ -576,14 +590,14 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
              const offsetX3 = -halfSize + (Math.random() - 0.5) * 0.3;
              const offsetZ3 = z + (Math.random() - 0.5) * 0.4;
              leftTree.position.set(offsetX3, 0.75, offsetZ3);
-             scene.add(leftTree);
+             if (!isOnPath(offsetX3, offsetZ3)) scene.add(leftTree);
 
              // Right column
              const rightTree = new THREE.Mesh(fallbackTreeGeometry, fallbackTreeMaterial);
              const offsetX4 = halfSize + (Math.random() - 0.5) * 0.3;
              const offsetZ4 = z + (Math.random() - 0.5) * 0.4;
              rightTree.position.set(offsetX4, 0.75, offsetZ4);
-             scene.add(rightTree);
+             if (!isOnPath(offsetX4, offsetZ4)) scene.add(rightTree);
            }
         }
         
@@ -591,23 +605,26 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
       };
 
       const loadTreeModels = async () => {
-        // Load tree models
-        const treeModel = await new Promise<THREE.Group>((resolve, reject) => {
-          loader.load('/models/tree.glb', (gltf) => {
-            resolve(gltf.scene);
-          }, undefined, reject);
-        });
-
+        // Load tree model (pine only)
         const pineModel = await new Promise<THREE.Group>((resolve, reject) => {
           loader.load('/models/pine.glb', (gltf) => {
             resolve(gltf.scene);
           }, undefined, reject);
         });
 
-                 // Create 4 concentric rings of trees around the farm area
-         const farmAreaSize = 6; // Closer to contain the 3x3 farm buildings
-         const treeSpacing = 0.8; // Ultra dense spacing between trees
-         const ringGap = 1.6; // Smaller distance between each tree ring
+        // Create 4 concentric rings of trees around the farm area
+        const farmAreaSize = 6; // Closer to contain the 3x3 farm buildings
+        const treeSpacing = 0.8; // Ultra dense spacing between trees
+        const ringGap = 1.6; // Smaller distance between each tree ring
+
+        // Precompute path bounding boxes for tree avoidance
+        const pathBoxesModel = pathMeshesRef.current.map(mesh => new THREE.Box3().setFromObject(mesh));
+        const isOnPathModel = (x: number, z: number) => {
+          for (const box of pathBoxesModel) {
+            if (x >= box.min.x && x <= box.max.x && z >= box.min.z && z <= box.max.z) return true;
+          }
+          return false;
+        };
 
         // Helper function to position tree on ground
         const positionTreeOnGround = (tree: THREE.Group, x: number, z: number) => {
@@ -626,7 +643,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
                      // Top and bottom rows for this ring
            for (let x = -halfSize; x <= halfSize; x += treeSpacing) {
              // Top row
-             const topTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             const topTree = pineModel.clone();
              topTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
              topTree.rotation.y = Math.random() * Math.PI * 2;
              const offsetX = x + (Math.random() - 0.5) * 0.4;
@@ -637,10 +654,18 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
                topTree.castShadow = true;
                topTree.receiveShadow = true;
              }
-             scene.add(topTree);
+             // Build path bounding boxes for tree avoidance
+             const pathBoxes = pathMeshesRef.current.map(mesh => new THREE.Box3().setFromObject(mesh));
+             const isOnPath = (x: number, z: number) => {
+               for (const box of pathBoxes) {
+                 if (x >= box.min.x && x <= box.max.x && z >= box.min.z && z <= box.max.z) return true;
+               }
+               return false;
+             };
+             if (!isOnPathModel(offsetX, offsetZ)) scene.add(topTree);
 
              // Bottom row
-             const bottomTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             const bottomTree = pineModel.clone();
              bottomTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
              bottomTree.rotation.y = Math.random() * Math.PI * 2;
              const offsetX2 = x + (Math.random() - 0.5) * 0.4;
@@ -651,13 +676,13 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
                bottomTree.castShadow = true;
                bottomTree.receiveShadow = true;
              }
-             scene.add(bottomTree);
+             if (!isOnPathModel(offsetX2, offsetZ2)) scene.add(bottomTree);
            }
 
            // Left and right columns for this ring (excluding corners already filled)
            for (let z = -halfSize + treeSpacing; z < halfSize; z += treeSpacing) {
              // Left column
-             const leftTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             const leftTree = pineModel.clone();
              leftTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
              leftTree.rotation.y = Math.random() * Math.PI * 2;
              const offsetX3 = -halfSize + (Math.random() - 0.5) * 0.3;
@@ -668,10 +693,10 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
                leftTree.castShadow = true;
                leftTree.receiveShadow = true;
              }
-             scene.add(leftTree);
+             if (!isOnPathModel(offsetX3, offsetZ3)) scene.add(leftTree);
 
              // Right column
-             const rightTree = Math.random() > 0.5 ? treeModel.clone() : pineModel.clone();
+             const rightTree = pineModel.clone();
              rightTree.scale.setScalar(0.3 + Math.random() * 0.2); // Smaller trees (0.3-0.5)
              rightTree.rotation.y = Math.random() * Math.PI * 2;
              const offsetX4 = halfSize + (Math.random() - 0.5) * 0.3;
@@ -682,7 +707,7 @@ const Scene = forwardRef<SceneRef, SceneProps>(({ onSceneChange }, ref) => {
                rightTree.castShadow = true;
                rightTree.receiveShadow = true;
              }
-             scene.add(rightTree);
+             if (!isOnPathModel(offsetX4, offsetZ4)) scene.add(rightTree);
            }
         }
 
